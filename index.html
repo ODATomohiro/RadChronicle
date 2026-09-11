@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>RadChronicle - 空間線量マップ＆時系列解析</title>
   
-  <!-- Leaflet CSS -->
+  <!-- Leaflet CSS & Leaflet.draw CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+  
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -99,12 +101,10 @@
       border-radius: 6px;
     }
 
-    /* 標準地図のみモノクロ（白黒）化 */
     .grayscale-tile {
       filter: grayscale(100%) contrast(110%);
     }
 
-    /* マウス位置の座標表示ボックス */
     .coord-display {
       position: absolute;
       bottom: 10px;
@@ -142,6 +142,11 @@
       font-size: 0.95rem;
     }
 
+    .chart-actions {
+      display: flex;
+      gap: 5px;
+    }
+
     .chart-wrapper {
       flex: 1;
       position: relative;
@@ -176,27 +181,44 @@
       cursor: pointer;
       font-size: 0.85rem;
     }
+    .btn-success { background-color: #28a745; }
     .btn-danger { background-color: #dc3545; }
+    .btn-warning { background-color: #ffc107; color: #212529; }
+    .btn:disabled { background-color: #ccc; cursor: not-allowed; }
+
+    /* マップ左上のカスタムコントロールツールバー */
+    .map-tool-btn {
+      background: white;
+      border: 2px solid rgba(0,0,0,0.2);
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 0.8rem;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+    .map-tool-btn.active {
+      background: #007bff;
+      color: white;
+      border-color: #0056b3;
+    }
   </style>
 </head>
 <body>
 
   <div class="app-container">
     <div class="header-panel">
-      <!-- アプリ名 & クレジット -->
       <div class="brand-section">
         <h1 class="app-title">RadChronicle</h1>
         <span class="developer-credit">Developed by ODA Tomohiro</span>
       </div>
 
-      <!-- ファイル操作エリア -->
       <div class="file-area">
         <input type="file" id="fileInput" accept=".txt,.csv,.tsv,.rctrk" multiple style="font-size: 0.85rem;">
         <button id="clearBtn" class="btn btn-danger">クリア</button>
         <span id="status" style="color: #666; font-size: 0.85rem;">ファイルを選択（複数可）してください</span>
       </div>
 
-      <!-- 統計情報（中央値を追加） -->
       <div class="stats-box">
         <div>件数: <b id="statCount">0</b></div>
         <div>平均: <b id="statAvg">-</b></div>
@@ -211,7 +233,6 @@
       <!-- 左: マップ -->
       <div id="map-container">
         <div id="map"></div>
-        <!-- カーソル位置の座標インジケーター -->
         <div id="coordDisplay" class="coord-display">Lat: - , Lng: -</div>
       </div>
 
@@ -219,7 +240,15 @@
       <div class="chart-panel">
         <div class="chart-header">
           <h3 id="chartTitle">時系列線量グラフ</h3>
-          <button id="resetChartBtn" class="btn" style="display:none; font-size:0.75rem; padding:2px 6px;">全体に戻す</button>
+          <div class="chart-actions">
+            <!-- CSV出力ボタン -->
+            <button id="exportCsvBtn" class="btn btn-success" style="display:none; font-size:0.75rem; padding:2px 8px;">
+              選択範囲のCSV出力
+            </button>
+            <button id="resetChartBtn" class="btn btn-warning" style="display:none; font-size:0.75rem; padding:2px 6px;">
+              選択解除
+            </button>
+          </div>
         </div>
         <div class="chart-wrapper">
           <canvas id="doseChart"></canvas>
@@ -228,19 +257,18 @@
     </div>
   </div>
 
-  <!-- Leaflet JS -->
+  <!-- Leaflet JS & Leaflet.draw JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
 
   <script>
     const map = L.map('map').setView([37.456, 141.026], 14);
 
-    // 1. 国土地理院 標準地図タイル（モノクロ）
     const stdTile = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
       attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>',
       className: 'grayscale-tile'
     });
 
-    // 2. 国土地理院 航空写真タイル（カラー）
     const photoTile = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', {
       attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>'
     });
@@ -256,26 +284,80 @@
     let layerGroup = L.layerGroup().addTo(map);
     let selectionLayer = L.layerGroup().addTo(map);
     let allTracks = [];
+    let currentSelectedData = []; // 現在選択中のデータ保持用
     let doseChartInstance = null;
+
+    // 矩形選択ツールの追加（マップ左上）
+    const drawnItems = new L.FeatureGroup().addTo(map);
+    let rectangleDrawer = null;
+
+    const selectControl = L.control({ position: 'topleft' });
+    selectControl.onAdd = function () {
+      const btn = L.DomUtil.create('button', 'map-tool-btn');
+      btn.id = 'boxSelectBtn';
+      btn.innerHTML = '矩形選択';
+      btn.title = 'ドラッグして範囲を選択';
+      
+      L.DomEvent.disableClickPropagation(btn);
+      btn.onclick = function () {
+        if (btn.classList.contains('active')) {
+          cancelDrawing();
+        } else {
+          startDrawing();
+        }
+      };
+      return btn;
+    };
+    selectControl.addTo(map);
+
+    function startDrawing() {
+      const btn = document.getElementById('boxSelectBtn');
+      btn.classList.add('active');
+      btn.innerHTML = '選択解除';
+
+      rectangleDrawer = new L.Draw.Rectangle(map, {
+        shapeOptions: {
+          color: '#007bff',
+          weight: 2,
+          fillOpacity: 0.15
+        }
+      });
+      rectangleDrawer.enable();
+    }
+
+    function cancelDrawing() {
+      const btn = document.getElementById('boxSelectBtn');
+      if (btn) {
+        btn.classList.remove('active');
+        btn.innerHTML = '矩形選択';
+      }
+      if (rectangleDrawer) {
+        rectangleDrawer.disable();
+        rectangleDrawer = null;
+      }
+    }
+
+    map.on(L.Draw.Event.CREATED, function (e) {
+      drawnItems.clearLayers();
+      selectionLayer.clearLayers();
+
+      const layer = e.layer;
+      drawnItems.addLayer(layer);
+      cancelDrawing();
+
+      const bounds = layer.getBounds();
+      filterAndDisplaySelectedArea(bounds);
+    });
 
     map.on('mousemove', function(e) {
       document.getElementById('coordDisplay').innerText = 
         `Lat: ${e.latlng.lat.toFixed(6)}, Lng: ${e.latlng.lng.toFixed(6)}`;
     });
 
-    // 0.05 刻みの閾値とカラーパレット
     const grades = [0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45];
     const colors = [
-      '#1a9641', // ~0.05 (深緑)
-      '#a6d96a', // ~0.10 (黄緑)
-      '#ffffbf', // ~0.15 (薄黄)
-      '#ffe082', // ~0.20 (黄色)
-      '#fdae61', // ~0.25 (薄橙)
-      '#f46d43', // ~0.30 (朱色)
-      '#d7191c', // ~0.35 (赤)
-      '#a50026', // ~0.40 (深赤)
-      '#7a0177', // ~0.45 (紫)
-      '#49006a'  // 0.45+  (暗紫)
+      '#1a9641', '#a6d96a', '#ffffbf', '#ffe082', '#fdae61', 
+      '#f46d43', '#d7191c', '#a50026', '#7a0177', '#49006a'
     ];
 
     function getColor(dose) {
@@ -285,7 +367,6 @@
       return colors[0];
     }
 
-    // 凡例の作成
     const legend = L.control({ position: 'bottomright' });
     legend.onAdd = function () {
       const div = L.DomUtil.create('div', 'legend');
@@ -412,6 +493,7 @@
     function renderMap() {
       layerGroup.clearLayers();
       selectionLayer.clearLayers();
+      drawnItems.clearLayers();
       const allBounds = [];
 
       allTracks.forEach(trackData => {
@@ -455,11 +537,14 @@
 
     function drawFullDataChart() {
       const allData = allTracks.flat();
+      currentSelectedData = [];
       if (allData.length === 0) return;
 
       selectionLayer.clearLayers();
+      drawnItems.clearLayers();
       document.getElementById('chartTitle').innerText = '全体データの時系列線量推移';
       document.getElementById('resetChartBtn').style.display = 'none';
+      document.getElementById('exportCsvBtn').style.display = 'none';
 
       const labels = allData.map(d => d.time);
       const doses = allData.map(d => d.dose);
@@ -505,7 +590,35 @@
       });
     }
 
+    // 矩形（ドラッグ選択）範囲内データの抽出・表示
+    function filterAndDisplaySelectedArea(bounds) {
+      const selectedItems = [];
+
+      allTracks.forEach(trackData => {
+        trackData.forEach(item => {
+          if (bounds.contains([item.lat, item.lng])) {
+            selectedItems.push(item);
+          }
+        });
+      });
+
+      currentSelectedData = selectedItems;
+
+      if (selectedItems.length === 0) {
+        alert('選択した範囲内にデータが見つかりませんでした。');
+        return;
+      }
+
+      document.getElementById('chartTitle').innerText = `矩形選択範囲 (${selectedItems.length}件)`;
+      document.getElementById('resetChartBtn').style.display = 'inline-block';
+      document.getElementById('exportCsvBtn').style.display = 'inline-block';
+
+      renderCustomChart(selectedItems);
+    }
+
+    // 単一点クリック時の周辺(20m)データ表示
     function showNearbyChart(targetLat, targetLng) {
+      drawnItems.clearLayers();
       const nearbyItems = [];
 
       allTracks.forEach(trackData => {
@@ -515,6 +628,8 @@
           }
         });
       });
+
+      currentSelectedData = nearbyItems;
 
       if (nearbyItems.length === 0) return;
 
@@ -527,11 +642,16 @@
         weight: 1.5
       }).addTo(selectionLayer);
 
-      document.getElementById('chartTitle').innerText = '選択地点周辺(20m)の時系列線量';
+      document.getElementById('chartTitle').innerText = `選択地点周辺20m (${nearbyItems.length}件)`;
       document.getElementById('resetChartBtn').style.display = 'inline-block';
+      document.getElementById('exportCsvBtn').style.display = 'inline-block';
 
-      const labels = nearbyItems.map(d => d.time);
-      const doses = nearbyItems.map(d => d.dose);
+      renderCustomChart(nearbyItems);
+    }
+
+    function renderCustomChart(items) {
+      const labels = items.map(d => d.time);
+      const doses = items.map(d => d.dose);
 
       if (doseChartInstance) doseChartInstance.destroy();
 
@@ -559,7 +679,7 @@
               callbacks: {
                 afterLabel: function(context) {
                   const idx = context.dataIndex;
-                  const item = nearbyItems[idx];
+                  const item = items[idx];
                   if (item) {
                     return `緯度: ${item.lat.toFixed(6)}\n経度: ${item.lng.toFixed(6)}`;
                   }
@@ -575,9 +695,29 @@
       });
     }
 
+    // CSV出力処理
+    document.getElementById('exportCsvBtn').addEventListener('click', function() {
+      if (currentSelectedData.length === 0) return;
+
+      let csvContent = "\uFEFF"; // UTF-8 BOM（文字化け防止）
+      csvContent += "Time,Latitude,Longitude,DoseRate_uSvh\n";
+
+      currentSelectedData.forEach(item => {
+        csvContent += `"${item.time}",${item.lat},${item.lng},${item.dose.toFixed(4)}\n`;
+      });
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `radchronicle_selection_${new Date().toISOString().slice(0,10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+
     document.getElementById('resetChartBtn').addEventListener('click', drawFullDataChart);
 
-    // 統計計算（中央値計算ロジックを追加）
     function updateStats() {
       const allData = allTracks.flat();
       document.getElementById('statCount').innerText = allData.length;
@@ -586,10 +726,8 @@
 
       const doses = allData.map(d => d.dose);
       
-      // 平均
       const avg = doses.reduce((a, b) => a + b, 0) / doses.length;
       
-      // 中央値 (Median)
       const sorted = [...doses].sort((a, b) => a - b);
       const mid = Math.floor(sorted.length / 2);
       const median = sorted.length % 2 !== 0 
@@ -604,8 +742,10 @@
 
     document.getElementById('clearBtn').addEventListener('click', function() {
       allTracks = [];
+      currentSelectedData = [];
       layerGroup.clearLayers();
       selectionLayer.clearLayers();
+      drawnItems.clearLayers();
       document.getElementById('fileInput').value = '';
       document.getElementById('statCount').innerText = '0';
       document.getElementById('statMax').innerText = '-';
@@ -616,6 +756,7 @@
       if (doseChartInstance) doseChartInstance.destroy();
       document.getElementById('chartTitle').innerText = '時系列線量グラフ';
       document.getElementById('resetChartBtn').style.display = 'none';
+      document.getElementById('exportCsvBtn').style.display = 'none';
       document.getElementById('status').innerText = 'データをクリアしました';
     });
   </script>
