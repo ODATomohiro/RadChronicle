@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RadChronicle - 空間線量マップ＆時系列解析</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: #f4f4f4;
+      color: #333;
+      overflow: hidden;
+    }
+
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      padding: 10px;
+      box-sizing: border-box;
+      gap: 10px;
+    }
+
+    .header-panel {
+      background: white;
+      padding: 10px 18px;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      gap: 15px;
+    }
+
+    .brand-section {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .app-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #1a252f;
+      letter-spacing: 0.5px;
+      margin: 0;
+    }
+
+    .developer-credit {
+      font-size: 0.75rem;
+      color: #7f8c8d;
+      font-weight: 500;
+    }
+
+    .file-area {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .stats-box {
+      display: flex;
+      gap: 15px;
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      padding: 5px 12px;
+      border-radius: 4px;
+      font-size: 0.85rem;
+    }
+
+    .main-content {
+      display: flex;
+      flex: 1;
+      gap: 10px;
+      min-height: 0;
+    }
+
+    #map-container {
+      flex: 6;
+      background: white;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      position: relative;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+      border-radius: 6px;
+    }
+
+    /* 標準地図のみモノクロ（白黒）化 */
+    .grayscale-tile {
+      filter: grayscale(100%) contrast(110%);
+    }
+
+    /* マウス位置の座標表示ボックス */
+    .coord-display {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      border: 1px solid #ccc;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+      pointer-events: none;
+    }
+
+    .chart-panel {
+      flex: 4;
+      background: white;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 5px;
+    }
+
+    .chart-header h3 {
+      margin: 0;
+      font-size: 0.95rem;
+    }
+
+    .chart-wrapper {
+      flex: 1;
+      position: relative;
+      min-height: 0;
+    }
+
+    .legend {
+      padding: 6px 8px;
+      font: 11px Arial, sans-serif;
+      background: rgba(255,255,255,0.9);
+      box-shadow: 0 0 8px rgba(0,0,0,0.2);
+      border-radius: 4px;
+      line-height: 16px;
+    }
+    .legend i {
+      width: 14px;
+      height: 14px;
+      float: left;
+      margin-right: 5px;
+      opacity: 0.85;
+    }
+
+    .btn {
+      padding: 4px 10px;
+      border: none;
+      background-color: #007bff;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .btn-danger { background-color: #dc3545; }
+  </style>
+</head>
+<body>
+
+  <div class="app-container">
+    <div class="header-panel">
+      <!-- アプリ名 & クレジット -->
+      <div class="brand-section">
+        <h1 class="app-title">RadChronicle</h1>
+        <span class="developer-credit">Developed by ODA Tomohiro</span>
+      </div>
+
+      <!-- ファイル操作エリア -->
+      <div class="file-area">
+        <input type="file" id="fileInput" accept=".txt,.csv,.tsv,.rctrk" multiple style="font-size: 0.85rem;">
+        <button id="clearBtn" class="btn btn-danger">クリア</button>
+        <span id="status" style="color: #666; font-size: 0.85rem;">ファイルを選択（複数可）してください</span>
+      </div>
+
+      <!-- 統計情報 -->
+      <div class="stats-box">
+        <div>件数: <b id="statCount">0</b></div>
+        <div>平均: <b id="statAvg">-</b></div>
+        <div>最大: <b id="statMax">-</b></div>
+        <div>最小: <b id="statMin">-</b></div>
+        <div>(μSv/h)</div>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <!-- 左: マップ -->
+      <div id="map-container">
+        <div id="map"></div>
+        <!-- カーソル位置の座標インジケーター -->
+        <div id="coordDisplay" class="coord-display">Lat: - , Lng: -</div>
+      </div>
+
+      <!-- 右: 線量・時間グラフ -->
+      <div class="chart-panel">
+        <div class="chart-header">
+          <h3 id="chartTitle">時系列線量グラフ</h3>
+          <button id="resetChartBtn" class="btn" style="display:none; font-size:0.75rem; padding:2px 6px;">全体に戻す</button>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="doseChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    const map = L.map('map').setView([37.456, 141.026], 14);
+
+    // 1. 国土地理院 標準地図タイル（モノクロクラス付与）
+    const stdTile = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
+      attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>',
+      className: 'grayscale-tile'
+    });
+
+    // 2. 国土地理院 航空写真（オルソ画像）タイル（カラー）
+    const photoTile = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', {
+      attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>'
+    });
+
+    // 初期レイヤー（標準地図）を追加
+    stdTile.addTo(map);
+
+    // レイヤー切り替えコントロール（右上）
+    const baseMaps = {
+      "標準地図 (モノクロ)": stdTile,
+      "航空写真 (カラー)": photoTile
+    };
+    L.control.layers(baseMaps, null, { position: 'topright' }).addTo(map);
+
+    let layerGroup = L.layerGroup().addTo(map);
+    let selectionLayer = L.layerGroup().addTo(map);
+    let allTracks = [];
+    let doseChartInstance = null;
+
+    map.on('mousemove', function(e) {
+      document.getElementById('coordDisplay').innerText = 
+        `Lat: ${e.latlng.lat.toFixed(6)}, Lng: ${e.latlng.lng.toFixed(6)}`;
+    });
+
+    const grades = [0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0];
+    const colors = ['#FED976', '#FEB24C', '#FD8D3C', '#FC4E2A', '#E31A1C', '#BD0026', '#800026'];
+
+    function getColor(dose) {
+      for (let i = grades.length - 1; i >= 0; i--) {
+        if (dose >= grades[i]) return colors[i];
+      }
+      return colors[0];
+    }
+
+    const legend = L.control({ position: 'bottomright' });
+    legend.onAdd = function () {
+      const div = L.DomUtil.create('div', 'legend');
+      div.innerHTML = '<b>線量 (μSv/h)</b><br>';
+      for (let i = 0; i < grades.length; i++) {
+        div.innerHTML +=
+          '<i style="background:' + colors[i] + '"></i> ' +
+          grades[i] + (grades[i + 1] ? ' &ndash; ' + grades[i + 1] + '<br>' : '+');
+      }
+      return div;
+    };
+    legend.addTo(map);
+
+    function getDistanceMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function formatTime(val) {
+      if (!val) return '';
+      const strVal = String(val).trim();
+      if (strVal.includes('-') || strVal.includes('/')) {
+        return strVal;
+      }
+      let num = Number(strVal);
+      if (!isNaN(num) && num > 1000000000) {
+        if (num > 1e16) {
+          num = Math.floor((num - 116444736000000000) / 10000);
+        } else if (num > 1e14) {
+          num = Math.floor(num / 1e6);
+        } else if (num > 1e11) {
+          num = Math.floor(num / 1e3);
+        }
+        const d = new Date(num);
+        if (!isNaN(d.getTime())) {
+          return d.toISOString().replace('T', ' ').substring(0, 19);
+        }
+      }
+      return strVal;
+    }
+
+    document.getElementById('fileInput').addEventListener('change', function(e) {
+      const files = Array.from(e.target.files);
+      if (files.length === 0) return;
+
+      let readPromises = files.map(file => {
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (evt) => resolve(parseTextData(evt.target.result));
+          reader.readAsText(file);
+        });
+      });
+
+      Promise.all(readPromises).then(results => {
+        results.forEach(data => {
+          if (data.length > 0) allTracks.push(data);
+        });
+
+        updateStats();
+        renderMap();
+        drawFullDataChart();
+        document.getElementById('status').innerText = '読み込み完了';
+      });
+    });
+
+    function parseTextData(textData) {
+      const parsed = [];
+      const lines = textData.trim().split(/\r?\n/);
+
+      let headerIndex = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (/Latitude/i.test(lines[i]) && /Longitude/i.test(lines[i])) {
+          headerIndex = i;
+          break;
+        }
+      }
+
+      if (headerIndex === -1) return parsed;
+
+      const headerLine = lines[headerIndex];
+      const delimiter = headerLine.includes('\t') ? '\t' : (headerLine.includes(',') ? ',' : /\s+/);
+      const splitRow = (str) => str.trim().split(delimiter).map(s => s.trim().replace(/^"|"$/g, ''));
+
+      const headers = splitRow(headerLine);
+
+      const latIdx = headers.findIndex(h => /^Latitude$/i.test(h) || /^lat$/i.test(h));
+      const lngIdx = headers.findIndex(h => /^Longitude$/i.test(h) || /^lon$/i.test(h) || /^lng$/i.test(h));
+      let doseIdx = headers.findIndex(h => /^DoseRate$/i.test(h) || h.toLowerCase() === 'doserate');
+      
+      let timeIdx = headers.findIndex(h => /^Time$/i.test(h));
+      if (timeIdx === -1) {
+        timeIdx = headers.findIndex(h => /^Timestamp$/i.test(h) || /^Date$/i.test(h));
+      }
+
+      if (latIdx === -1 || lngIdx === -1 || doseIdx === -1) return parsed;
+
+      for (let i = headerIndex + 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        const cols = splitRow(line);
+        if (cols.length <= doseIdx) continue;
+
+        const lat = parseFloat(cols[latIdx]);
+        const lng = parseFloat(cols[lngIdx]);
+        const rawDose = parseFloat(cols[doseIdx]);
+        const rawTime = timeIdx !== -1 ? cols[timeIdx] : `Pt ${i}`;
+        const timeStr = formatTime(rawTime);
+
+        if (!isNaN(lat) && !isNaN(lng) && !isNaN(rawDose)) {
+          const doseInMicro = rawDose / 100;
+          parsed.push({ lat, lng, dose: doseInMicro, time: timeStr });
+        }
+      }
+      return parsed;
+    }
+
+    function renderMap() {
+      layerGroup.clearLayers();
+      selectionLayer.clearLayers();
+      const allBounds = [];
+
+      allTracks.forEach(trackData => {
+        const latLngs = [];
+
+        trackData.forEach(item => {
+          const latLng = [item.lat, item.lng];
+          latLngs.push(latLng);
+          allBounds.push(latLng);
+
+          const marker = L.circleMarker(latLng, {
+            radius: 5,
+            fillColor: getColor(item.dose),
+            color: '#333',
+            weight: 0.5,
+            opacity: 1,
+            fillOpacity: 0.85
+          }).addTo(layerGroup);
+
+          marker.bindPopup(`
+            <b>線量:</b> ${item.dose.toFixed(4)} μSv/h<br>
+            <b>時刻:</b> ${item.time}<br>
+            <b>緯度:</b> ${item.lat.toFixed(6)}<br>
+            <b>経度:</b> ${item.lng.toFixed(6)}
+          `);
+
+          marker.on('click', function() {
+            showNearbyChart(item.lat, item.lng);
+          });
+        });
+
+        if (latLngs.length > 0) {
+          L.polyline(latLngs, { color: '#555', weight: 2, opacity: 0.4 }).addTo(layerGroup);
+        }
+      });
+
+      if (allBounds.length > 0) {
+        map.fitBounds(L.latLngBounds(allBounds));
+      }
+    }
+
+    function drawFullDataChart() {
+      const allData = allTracks.flat();
+      if (allData.length === 0) return;
+
+      selectionLayer.clearLayers();
+      document.getElementById('chartTitle').innerText = '全体データの時系列線量推移';
+      document.getElementById('resetChartBtn').style.display = 'none';
+
+      const labels = allData.map(d => d.time);
+      const doses = allData.map(d => d.dose);
+
+      if (doseChartInstance) doseChartInstance.destroy();
+
+      const ctx = document.getElementById('doseChart').getContext('2d');
+      doseChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: '線量 (μSv/h)',
+            data: doses,
+            borderColor: '#ff4d4d',
+            backgroundColor: 'rgba(255, 77, 77, 0.15)',
+            fill: true,
+            tension: 0.1,
+            pointRadius: 1.5
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            tooltip: {
+              callbacks: {
+                afterLabel: function(context) {
+                  const idx = context.dataIndex;
+                  const item = allData[idx];
+                  if (item) {
+                    return `緯度: ${item.lat.toFixed(6)}\n経度: ${item.lng.toFixed(6)}`;
+                  }
+                }
+              }
+            }
+          },
+          scales: {
+            x: { title: { display: true, text: '時刻', font: { size: 10 } } },
+            y: { beginAtZero: true, title: { display: true, text: 'μSv/h', font: { size: 10 } } }
+          }
+        }
+      });
+    }
+
+    function showNearbyChart(targetLat, targetLng) {
+      const nearbyItems = [];
+
+      allTracks.forEach(trackData => {
+        trackData.forEach(item => {
+          if (getDistanceMeters(targetLat, targetLng, item.lat, item.lng) <= 20) {
+            nearbyItems.push(item);
+          }
+        });
+      });
+
+      if (nearbyItems.length === 0) return;
+
+      selectionLayer.clearLayers();
+      L.circle([targetLat, targetLng], {
+        radius: 20,
+        color: '#007bff',
+        fillColor: '#007bff',
+        fillOpacity: 0.15,
+        weight: 1.5
+      }).addTo(selectionLayer);
+
+      document.getElementById('chartTitle').innerText = '選択地点周辺(20m)の時系列線量';
+      document.getElementById('resetChartBtn').style.display = 'inline-block';
+
+      const labels = nearbyItems.map(d => d.time);
+      const doses = nearbyItems.map(d => d.dose);
+
+      if (doseChartInstance) doseChartInstance.destroy();
+
+      const ctx = document.getElementById('doseChart').getContext('2d');
+      doseChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: '線量 (μSv/h)',
+            data: doses,
+            borderColor: '#007bff',
+            backgroundColor: 'rgba(0, 123, 255, 0.15)',
+            pointBackgroundColor: doses.map(d => getColor(d)),
+            pointRadius: 4,
+            fill: true,
+            tension: 0.1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            tooltip: {
+              callbacks: {
+                afterLabel: function(context) {
+                  const idx = context.dataIndex;
+                  const item = nearbyItems[idx];
+                  if (item) {
+                    return `緯度: ${item.lat.toFixed(6)}\n経度: ${item.lng.toFixed(6)}`;
+                  }
+                }
+              }
+            }
+          },
+          scales: {
+            x: { title: { display: true, text: '時刻', font: { size: 10 } } },
+            y: { beginAtZero: true, title: { display: true, text: 'μSv/h', font: { size: 10 } } }
+          }
+        }
+      });
+    }
+
+    document.getElementById('resetChartBtn').addEventListener('click', drawFullDataChart);
+
+    function updateStats() {
+      const allData = allTracks.flat();
+      document.getElementById('statCount').innerText = allData.length;
+
+      if (allData.length === 0) return;
+
+      const doses = allData.map(d => d.dose);
+      document.getElementById('statMax').innerText = Math.max(...doses).toFixed(4);
+      document.getElementById('statMin').innerText = Math.min(...doses).toFixed(4);
+      document.getElementById('statAvg').innerText = (doses.reduce((a, b) => a + b, 0) / doses.length).toFixed(4);
+    }
+
+    document.getElementById('clearBtn').addEventListener('click', function() {
+      allTracks = [];
+      layerGroup.clearLayers();
+      selectionLayer.clearLayers();
+      document.getElementById('fileInput').value = '';
+      document.getElementById('statCount').innerText = '0';
+      document.getElementById('statMax').innerText = '-';
+      document.getElementById('statMin').innerText = '-';
+      document.getElementById('statAvg').innerText = '-';
+      document.getElementById('coordDisplay').innerText = 'Lat: - , Lng: -';
+      if (doseChartInstance) doseChartInstance.destroy();
+      document.getElementById('chartTitle').innerText = '時系列線量グラフ';
+      document.getElementById('resetChartBtn').style.display = 'none';
+      document.getElementById('status').innerText = 'データをクリアしました';
+    });
+  </script>
+
+</body>
+</html>
