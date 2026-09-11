@@ -70,7 +70,7 @@
 
     .stats-box {
       display: flex;
-      gap: 15px;
+      gap: 12px;
       background: #f8f9fa;
       border: 1px solid #e9ecef;
       padding: 5px 12px;
@@ -149,19 +149,22 @@
     }
 
     .legend {
-      padding: 6px 8px;
+      padding: 6px 10px;
       font: 11px Arial, sans-serif;
-      background: rgba(255,255,255,0.9);
+      background: rgba(255,255,255,0.92);
       box-shadow: 0 0 8px rgba(0,0,0,0.2);
       border-radius: 4px;
       line-height: 16px;
+      max-height: 250px;
+      overflow-y: auto;
     }
     .legend i {
       width: 14px;
       height: 14px;
       float: left;
-      margin-right: 5px;
+      margin-right: 6px;
       opacity: 0.85;
+      border-radius: 2px;
     }
 
     .btn {
@@ -193,10 +196,11 @@
         <span id="status" style="color: #666; font-size: 0.85rem;">ファイルを選択（複数可）してください</span>
       </div>
 
-      <!-- 統計情報 -->
+      <!-- 統計情報（中央値を追加） -->
       <div class="stats-box">
         <div>件数: <b id="statCount">0</b></div>
         <div>平均: <b id="statAvg">-</b></div>
+        <div>中央値: <b id="statMedian">-</b></div>
         <div>最大: <b id="statMax">-</b></div>
         <div>最小: <b id="statMin">-</b></div>
         <div>(μSv/h)</div>
@@ -230,21 +234,19 @@
   <script>
     const map = L.map('map').setView([37.456, 141.026], 14);
 
-    // 1. 国土地理院 標準地図タイル（モノクロクラス付与）
+    // 1. 国土地理院 標準地図タイル（モノクロ）
     const stdTile = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
       attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>',
       className: 'grayscale-tile'
     });
 
-    // 2. 国土地理院 航空写真（オルソ画像）タイル（カラー）
+    // 2. 国土地理院 航空写真タイル（カラー）
     const photoTile = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', {
       attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>'
     });
 
-    // 初期レイヤー（標準地図）を追加
     stdTile.addTo(map);
 
-    // レイヤー切り替えコントロール（右上）
     const baseMaps = {
       "標準地図 (モノクロ)": stdTile,
       "航空写真 (カラー)": photoTile
@@ -261,8 +263,20 @@
         `Lat: ${e.latlng.lat.toFixed(6)}, Lng: ${e.latlng.lng.toFixed(6)}`;
     });
 
-    const grades = [0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0];
-    const colors = ['#FED976', '#FEB24C', '#FD8D3C', '#FC4E2A', '#E31A1C', '#BD0026', '#800026'];
+    // 0.05 刻みの閾値とカラーパレット
+    const grades = [0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45];
+    const colors = [
+      '#1a9641', // ~0.05 (深緑)
+      '#a6d96a', // ~0.10 (黄緑)
+      '#ffffbf', // ~0.15 (薄黄)
+      '#ffe082', // ~0.20 (黄色)
+      '#fdae61', // ~0.25 (薄橙)
+      '#f46d43', // ~0.30 (朱色)
+      '#d7191c', // ~0.35 (赤)
+      '#a50026', // ~0.40 (深赤)
+      '#7a0177', // ~0.45 (紫)
+      '#49006a'  // 0.45+  (暗紫)
+    ];
 
     function getColor(dose) {
       for (let i = grades.length - 1; i >= 0; i--) {
@@ -271,14 +285,16 @@
       return colors[0];
     }
 
+    // 凡例の作成
     const legend = L.control({ position: 'bottomright' });
     legend.onAdd = function () {
       const div = L.DomUtil.create('div', 'legend');
       div.innerHTML = '<b>線量 (μSv/h)</b><br>';
       for (let i = 0; i < grades.length; i++) {
+        const nextVal = grades[i + 1];
         div.innerHTML +=
           '<i style="background:' + colors[i] + '"></i> ' +
-          grades[i] + (grades[i + 1] ? ' &ndash; ' + grades[i + 1] + '<br>' : '+');
+          grades[i].toFixed(2) + (nextVal ? ' &ndash; ' + nextVal.toFixed(2) + '<br>' : '+');
       }
       return div;
     };
@@ -561,6 +577,7 @@
 
     document.getElementById('resetChartBtn').addEventListener('click', drawFullDataChart);
 
+    // 統計計算（中央値計算ロジックを追加）
     function updateStats() {
       const allData = allTracks.flat();
       document.getElementById('statCount').innerText = allData.length;
@@ -568,9 +585,21 @@
       if (allData.length === 0) return;
 
       const doses = allData.map(d => d.dose);
+      
+      // 平均
+      const avg = doses.reduce((a, b) => a + b, 0) / doses.length;
+      
+      // 中央値 (Median)
+      const sorted = [...doses].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      const median = sorted.length % 2 !== 0 
+        ? sorted[mid] 
+        : (sorted[mid - 1] + sorted[mid]) / 2;
+
       document.getElementById('statMax').innerText = Math.max(...doses).toFixed(4);
       document.getElementById('statMin').innerText = Math.min(...doses).toFixed(4);
-      document.getElementById('statAvg').innerText = (doses.reduce((a, b) => a + b, 0) / doses.length).toFixed(4);
+      document.getElementById('statAvg').innerText = avg.toFixed(4);
+      document.getElementById('statMedian').innerText = median.toFixed(4);
     }
 
     document.getElementById('clearBtn').addEventListener('click', function() {
@@ -582,6 +611,7 @@
       document.getElementById('statMax').innerText = '-';
       document.getElementById('statMin').innerText = '-';
       document.getElementById('statAvg').innerText = '-';
+      document.getElementById('statMedian').innerText = '-';
       document.getElementById('coordDisplay').innerText = 'Lat: - , Lng: -';
       if (doseChartInstance) doseChartInstance.destroy();
       document.getElementById('chartTitle').innerText = '時系列線量グラフ';
